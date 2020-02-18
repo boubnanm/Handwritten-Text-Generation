@@ -1,56 +1,80 @@
 from utils import *
 from model import Model
+import argparse
 from torch.utils.data import DataLoader
 import torch.optim as optim
 
-epochs = 100
-lr = 1e-4
-batch_size = 50
+parser = argparse.ArgumentParser()
+parser.add_argument('--hidden_size', type=int, default=256, help='size of LSTM hidden state')
+parser.add_argument('--num_layers', type=int, default=2, help='number of layers in the RNN')
+parser.add_argument('--batch_size', type=int, default=50, help='Size of training batch')
+parser.add_argument('--seq_length', type=int, default=300, help='Length of stroke sequence to train on')
+parser.add_argument('--epochs', type=int, default=150, help='Number of epochs')
+parser.add_argument('--grad_clip', type=float, default=10, help='Value to clip gradients on')
+parser.add_argument('--lr', type=float, default=0.005, help='Learning rate')
 
-train_loader = DataLoader(HandwritingDataset(data_dir="./data", split="train"), batch_size=batch_size, shuffle=True)
-val_loader = HandwritingDataset(data_dir="./data", split="val")
-
-lstm_model = Model(seq_length=300)
-
-#optimizer = optim.SGD(model.parameters(), lr=args.lr, momentum=args.momentum)
-
-optimizer = optim.Adam(lstm_model.parameters(), lr=lr)
-
-batch_interval = ((len(train_loader.dataset)/batch_size)+1)//5
+parser.add_argument('--save_every', type=int, default=30, help='save frequency')
+parser.add_argument('--model_dir', type=str, default='./saves', help='Directory path to save models in')
 
 
-for epoch in range(epochs):
+parser.add_argument('--decay_rate', type=float, default=0.95, help='Decay rate for Adam optimizer learning rate')
+parser.add_argument('--decay_every', type=int, default=5, help='Epoch frequence to decay learning rate')
+
+parser.add_argument('--num_mixture', type=int, default=20, help='Number of gaussian mixtures')
+parser.add_argument('--stroke_scale', type=float, default=20, help='Factor to scale raw strokes data down by')
+
+args = parser.parse_args()
+
+if not os.path.exists(args.model_dir):
+    os.makedirs(args.model_dir)
+
+
+use_cuda = torch.cuda.is_available()
+
+
+train_loader = DataLoader(HandwritingDataset(data_dir="./data", split="train", seq_length=args.seq_length, batch_size=args.batch_size, scale_factor=atgs.stroke_scale),
+                          batch_size=args.batch_size, shuffle=False)
+val_loader = DataLoader(HandwritingDataset(data_dir="./data", split="val", seq_length=args.seq_length, batch_size=args.batch_size),
+                        batch_size=args.batch_size, shuffle=False)
+
+lstm_model = Model(seq_length=args.seq_length, bidirectional=False, num_mixtures=args.num_mixture, hidden_size=256)
+
+if use_cuda:
+    lstm_model.cuda()
+
+optimizer = optim.Adam(lstm_model.parameters(), lr=args.lr)
+
+batch_interval = ((len(train_loader.dataset) / args.batch_size) + 1) // 5
+
+for epoch in range(args.epochs):
     for batch_idx, (stroke, target_stroke, sent) in enumerate(train_loader):
-        eos, pi, mus_1, mus_2, sigmas_1, sigmas_2, rhos = lstm_model(stroke)
 
-        x1, x2, x3 = target_stroke[:,:,0].unsqueeze(2), target_stroke[:,:,1].unsqueeze(2), target_stroke[:,:,2].unsqueeze(2)
-
-        epsilon = 1e-20
-
-        norm_1, norm_2 = (x1 - mus_1).pow(2), (x2 - mus_2).pow(2)
-        var_1, var_2 = sigmas_1.pow(2), sigmas_2.pow(2)
-        co_var = 2 * rhos * (x1 - mus_1) * (x2 - mus_2) / (sigmas_1 * sigmas_2)
-        Z = norm_1/var_1 + norm_2/var_2 - co_var
-        normal = torch.exp(-Z/(2*(1-rhos.pow(2)))) /(2*torch.FloatTensor([np.pi])*sigmas_1*sigmas_2*torch.sqrt((1-rhos.pow(2))))
-        mixture = torch.sum(normal*pi,dim=2)
-
-        log_mixture = torch.log(torch.max(mixture, epsilon*torch.ones_like(mixture))).unsqueeze(2)
-        log_bernoulli = x3*torch.log(eos.unsqueeze(2)) + (1-x3)*torch.log(1-eos.unsqueeze(2))
-
-        #log_loss = torch.mean(torch.sum(-log_mixture - log_bernoulli, dim=(1,2)))
-        log_loss = torch.mean(-log_mixture - log_bernoulli)
+        loss = lstm_model.compute_loss(stroke, target_stroke)
 
         optimizer.zero_grad()
-        log_loss.backward()
+        loss.backward()
 
         torch.nn.utils.clip_grad_norm_(lstm_model.parameters(), 10)
         optimizer.step()
 
-        if (batch_idx+1) % batch_interval == 0 or batch_idx==0:
+        if (batch_idx + 1) % batch_interval == 0 or batch_idx == 0:
             print('Train Epoch: {} [{}/{} ({:.0f}%)]\tLoss: {:.6f}'.format(
-                epoch+1, (batch_idx+1) * len(stroke), len(train_loader.dataset),
-                       100. * (batch_idx+1) / len(train_loader), log_loss.data.item()))
+                epoch + 1, (batch_idx + 1) * len(stroke), len(train_loader.dataset),
+                100. * (batch_idx + 1) / len(train_loader), loss.data.item()))
 
+    val_loss = []
+    for batch_idx, (stroke, target_stroke, _) in enumerate(val_loader):
+        val_loss.append(lstm_model.compute_loss(stroke, target_stroke).data.item())
+    print("Validation Loss: {:.6f}".format(np.mean(val_loss)))
 
+    if (epoch + 1) % args.save_every == 0:
+        print("Saving model to ./saves/model_{}.pth".format(epoch + 1))
+        torch.save(lstm_model.state_dict(), os.path.join(args.model_dir,"model_{}.pth".format(epoch + 1)))
 
+    if (epoch + 1) % args.decay_every == 0:
+        for g in optimizer.param_groups:
+            lr = g['lr']
+            g['lr'] = g['lr'] * args.decay_rate
+        print("Learning rate decay from {:.4f} to {:.4f}".format(lr, g['lr']))
 
+    print("\n")
