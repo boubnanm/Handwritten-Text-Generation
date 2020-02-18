@@ -32,7 +32,6 @@ class HandwritingDataset(torch.utils.data.Dataset):
                 or not os.path.exists(self.val_strokes_file) or not os.path.exists(self.val_labels_file):
             self.preprocess_data()
 
-
         if split=="train":
             with open(self.train_strokes_file, "rb") as f:
                 self.strokes = pickle.load(f)
@@ -47,6 +46,8 @@ class HandwritingDataset(torch.utils.data.Dataset):
 
 
     def preprocess_data(self):
+        if not os.path.exists(self.strokes_dir) or not os.path.exists(self.labels_dir):
+            raise ValueError("Please download lineStrokes and ascii data directories from the IAM online database and put them in the data directory")
         def getSentence(txt_path, sent_id):
             sents = []
             ESCAPE_CHAR = '~!@#$%^&*()_+{}:"<>?`-=[];\',./|\n'

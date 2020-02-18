@@ -12,29 +12,30 @@ parser.add_argument('--seq_length', type=int, default=300, help='Length of strok
 parser.add_argument('--epochs', type=int, default=150, help='Number of epochs')
 parser.add_argument('--grad_clip', type=float, default=10, help='Value to clip gradients on')
 parser.add_argument('--lr', type=float, default=0.005, help='Learning rate')
-
-parser.add_argument('--save_every', type=int, default=30, help='save frequency')
-parser.add_argument('--model_dir', type=str, default='./saves', help='Directory path to save models in')
-
-
+parser.add_argument('--num_mixture', type=int, default=20, help='Number of gaussian mixtures')
+parser.add_argument('--stroke_scale', type=float, default=20, help='Factor to scale raw strokes data down by')
 parser.add_argument('--decay_rate', type=float, default=0.95, help='Decay rate for Adam optimizer learning rate')
 parser.add_argument('--decay_every', type=int, default=5, help='Epoch frequence to decay learning rate')
 
-parser.add_argument('--num_mixture', type=int, default=20, help='Number of gaussian mixtures')
-parser.add_argument('--stroke_scale', type=float, default=20, help='Factor to scale raw strokes data down by')
+parser.add_argument('--save_every', type=int, default=30, help='save frequency')
+parser.add_argument('--model_dir', type=str, default='./saves', help='Directory path to save models in')
+parser.add_argument('--data_dir', type=str, default='./data', help='Directory path where IAM online database is')
+
 
 args = parser.parse_args()
 
 if not os.path.exists(args.model_dir):
     os.makedirs(args.model_dir)
 
+if not os.path.exists(args.data_dir):
+    os.makedirs(args.data_dir)
 
 use_cuda = torch.cuda.is_available()
 
 
-train_loader = DataLoader(HandwritingDataset(data_dir="./data", split="train", seq_length=args.seq_length, batch_size=args.batch_size, scale_factor=atgs.stroke_scale),
+train_loader = DataLoader(HandwritingDataset(data_dir=args.data_dir, split="train", seq_length=args.seq_length, batch_size=args.batch_size, scale_factor=args.stroke_scale),
                           batch_size=args.batch_size, shuffle=False)
-val_loader = DataLoader(HandwritingDataset(data_dir="./data", split="val", seq_length=args.seq_length, batch_size=args.batch_size),
+val_loader = DataLoader(HandwritingDataset(data_dir=args.data_dir, split="val", seq_length=args.seq_length, batch_size=args.batch_size),
                         batch_size=args.batch_size, shuffle=False)
 
 lstm_model = Model(seq_length=args.seq_length, bidirectional=False, num_mixtures=args.num_mixture, hidden_size=256)
